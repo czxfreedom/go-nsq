@@ -21,11 +21,11 @@ import (
 // IdentifyResponse represents the metadata
 // returned from an IDENTIFY command to nsqd
 type IdentifyResponse struct {
-	MaxRdyCount  int64 `json:"max_rdy_count"`
-	TLSv1        bool  `json:"tls_v1"`
-	Deflate      bool  `json:"deflate"`
-	Snappy       bool  `json:"snappy"`
-	AuthRequired bool  `json:"auth_required"`
+	MaxRdyCount  int64 `json:"max_rdy_count"` //限流数量
+	TLSv1        bool  `json:"tls_v1"`        //允许 TLS 来连接
+	Deflate      bool  `json:"deflate"`       // 允许 deflate 压缩这次连接
+	Snappy       bool  `json:"snappy"`        //允许 snappy 压缩这次连接
+	AuthRequired bool  `json:"auth_required"` //auth_required=true，客户端必须在 SUB, PUB 或 MPUB 命令前前发送 AUTH
 }
 
 // AuthResponse represents the metadata
@@ -49,7 +49,7 @@ type msgResponse struct {
 // various events that occur on a connection
 type Conn struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	messagesInFlight int64
+	messagesInFlight int64 //飞行中的消息数量
 	maxRdyCount      int64
 	rdyCount         int64
 	lastRdyTimestamp int64
@@ -63,26 +63,26 @@ type Conn struct {
 	tlsConn *tls.Conn
 	addr    string
 
-	delegate ConnDelegate
+	delegate ConnDelegate //接口作为结构体
 
 	logger   []logger
 	logLvl   LogLevel
 	logFmt   []string
 	logGuard sync.RWMutex
 
-	r io.Reader
-	w io.Writer
+	r io.Reader //读
+	w io.Writer //写
 
 	cmdChan         chan *Command
 	msgResponseChan chan *msgResponse
 	exitChan        chan int
 	drainReady      chan int
 
-	closeFlag int32
+	closeFlag int32 //关闭标志 1:关闭
 	stopper   sync.Once
 	wg        sync.WaitGroup
 
-	readLoopRunning int32
+	readLoopRunning int32 //读轮训
 }
 
 // NewConn returns a new Conn instance
@@ -183,13 +183,13 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 	c.conn = conn.(*net.TCPConn)
 	c.r = conn
 	c.w = conn
-
+	//发送初始通信协议魔法标识,用于标明，客户端和服务端双方使用的信息通信版本
 	_, err = c.Write(MagicV2)
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("[%s] failed to write magic - %s", c.addr, err)
 	}
-
+	//更新服务器上的客户端元数据和协商功能。
 	resp, err := c.identify()
 	if err != nil {
 		return nil, err
@@ -209,13 +209,16 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 
 	c.wg.Add(2)
 	atomic.StoreInt32(&c.readLoopRunning, 1)
+	//开启连接读循环
 	go c.readLoop()
+
 	go c.writeLoop()
 	return resp, nil
 }
 
 // Close idempotently initiates connection close
 func (c *Conn) Close() error {
+	//设置连接关闭标志,判断如果连接不为空,且飞行中的消息数量为0直接关闭
 	atomic.StoreInt32(&c.closeFlag, 1)
 	if c.conn != nil && atomic.LoadInt64(&c.messagesInFlight) == 0 {
 		return c.conn.CloseRead()
@@ -349,12 +352,12 @@ func (c *Conn) identify() (*IdentifyResponse, error) {
 	if err != nil {
 		return nil, ErrIdentify{err.Error()}
 	}
-
+	//发送 IDENTIFY 命令
 	err = c.WriteCommand(cmd)
 	if err != nil {
 		return nil, ErrIdentify{err.Error()}
 	}
-
+	//解析帧数据
 	frameType, data, err := ReadUnpackedResponse(c)
 	if err != nil {
 		return nil, ErrIdentify{err.Error()}
@@ -366,6 +369,8 @@ func (c *Conn) identify() (*IdentifyResponse, error) {
 
 	// check to see if the server was able to respond w/ capabilities
 	// i.e. it was a JSON response
+	//检查服务器是否能够响应write功能
+	//也就是说，这是一个JSON响应
 	if data[0] != '{' {
 		return nil, nil
 	}
@@ -377,7 +382,7 @@ func (c *Conn) identify() (*IdentifyResponse, error) {
 	}
 
 	c.log(LogLevelDebug, "IDENTIFY response: %+v", resp)
-
+	//最大准备好的接受数量
 	c.maxRdyCount = resp.MaxRdyCount
 
 	if resp.TLSv1 {
@@ -514,10 +519,11 @@ func (c *Conn) auth(secret string) error {
 func (c *Conn) readLoop() {
 	delegate := &connMessageDelegate{c}
 	for {
+		//关闭标志为已关闭则退出循环
 		if atomic.LoadInt32(&c.closeFlag) == 1 {
 			goto exit
 		}
-
+		//从nsq读取消息并解析
 		frameType, data, err := ReadUnpackedResponse(c)
 		if err != nil {
 			if err == io.EOF && atomic.LoadInt32(&c.closeFlag) == 1 {
@@ -533,6 +539,7 @@ func (c *Conn) readLoop() {
 		if frameType == FrameTypeResponse && bytes.Equal(data, []byte("_heartbeat_")) {
 			c.log(LogLevelDebug, "heartbeat received")
 			c.delegate.OnHeartbeat(c)
+			//接到心跳 就 发送 NOP命令
 			err := c.WriteCommand(Nop())
 			if err != nil {
 				c.log(LogLevelError, "IO error - %s", err)
@@ -545,6 +552,7 @@ func (c *Conn) readLoop() {
 		switch frameType {
 		case FrameTypeResponse:
 			c.delegate.OnResponse(c, data)
+			// 接收消息进行消费
 		case FrameTypeMessage:
 			msg, err := DecodeMessage(data)
 			if err != nil {
@@ -557,7 +565,7 @@ func (c *Conn) readLoop() {
 
 			atomic.AddInt64(&c.messagesInFlight, 1)
 			atomic.StoreInt64(&c.lastMsgTimestamp, time.Now().UnixNano())
-
+			//这个目前只有消费者在用 r.incomingMessages <- msg  就是将消息发送到incomingMessages
 			c.delegate.OnMessage(c, msg)
 		case FrameTypeError:
 			c.log(LogLevelError, "protocol error - %s", data)
@@ -569,6 +577,7 @@ func (c *Conn) readLoop() {
 	}
 
 exit:
+	//设置读循环为0
 	atomic.StoreInt32(&c.readLoopRunning, 0)
 	// start the connection close
 	messagesInFlight := atomic.LoadInt64(&c.messagesInFlight)
@@ -663,6 +672,31 @@ func (c *Conn) close() {
 	//         c. underlying TCP connection close
 	//         d. trigger Delegate OnClose()
 	//
+	//“干净”连接关闭的编排如下:
+	// 1. 关闭发送给nsqd的命令
+	// 2. 从nsqd接收到关闭等待响应
+	// 3. 设置c.closeFlag
+	// 4. readLoop（）退出
+	//a。如果航班中的消息>0延迟关闭（）
+	//一,。writeLoop（）继续在c.msgResponseChan chan上接收
+	//十,。飞行中的消息==0时调用关闭（）
+	//b。否则立即调用close（）
+	// 5. c、 出口关闭
+	//a。writeLoop（）退出
+	//一,。c、 快速关闭
+	//6a。启动cleanup（）goroutine（我们正在与进程内进行竞争
+	//路由消息，请参见下面的注释）
+	//a。等着c·德雷迪
+	//b。在c.msgResponseChan chan上循环并接收
+	//直到飞行中的消息==0
+	//一,。确保readLoop已退出
+	//6b。启动waitForCleanup（）goroutine
+	//b。等待等待组（包括readLoop（）和writeLoop（））
+	//和清理（goroutine）
+	//c。底层TCP连接关闭
+	//d。触发器委托OnClose（）
+	//
+
 	c.stopper.Do(func() {
 		c.log(LogLevelInfo, "beginning close")
 		close(c.exitChan)

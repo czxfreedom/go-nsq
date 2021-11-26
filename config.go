@@ -113,21 +113,28 @@ type Config struct {
 	LookupdPollTimeout  time.Duration `opt:"lookupd_poll_timeout" default:"1m"`
 
 	// Maximum duration when REQueueing (for doubling of deferred requeue)
+	//重新排队时的最长持续时间（延迟重新排队加倍）
 	MaxRequeueDelay     time.Duration `opt:"max_requeue_delay" min:"0" max:"60m" default:"15m"`
 	DefaultRequeueDelay time.Duration `opt:"default_requeue_delay" min:"0" max:"60m" default:"90s"`
 
 	// Backoff strategy, defaults to exponential backoff. Overwrite this to define alternative backoff algrithms.
+	//退避策略，默认为指数退避。覆盖此选项以定义替代回退算法。
 	BackoffStrategy BackoffStrategy `opt:"backoff_strategy" default:"exponential"`
 	// Maximum amount of time to backoff when processing fails 0 == no backoff
+	//处理失败时退避的最长时间0==无退避
 	MaxBackoffDuration time.Duration `opt:"max_backoff_duration" min:"0" max:"60m" default:"2m"`
 	// Unit of time for calculating consumer backoff
+	//计算消费者退避的时间单位
 	BackoffMultiplier time.Duration `opt:"backoff_multiplier" min:"0" max:"60m" default:"1s"`
 
 	// Maximum number of times this consumer will attempt to process a message before giving up
+	//此使用者在放弃之前尝试处理消息的最大次数
 	MaxAttempts uint16 `opt:"max_attempts" min:"0" max:"65535" default:"5"`
 
 	// Duration to wait for a message from an nsqd when in a state where RDY
 	// counts are re-distributed (e.g. max_in_flight < num_producers)
+	//处于RDY状态时等待来自nsqd的消息的持续时间
+	//重新分配计数（例如飞行中的最大值<数量）
 	LowRdyIdleTimeout time.Duration `opt:"low_rdy_idle_timeout" min:"1s" max:"5m" default:"10s"`
 	// Duration to wait until redistributing RDY for an nsqd regardless of LowRdyIdleTimeout
 	LowRdyTimeout time.Duration `opt:"low_rdy_timeout" min:"1s" max:"5m" default:"30s"`
@@ -143,6 +150,7 @@ type Config struct {
 	// Duration of time between heartbeats. This must be less than ReadTimeout
 	HeartbeatInterval time.Duration `opt:"heartbeat_interval" default:"30s"`
 	// Integer percentage to sample the channel (requires nsqd 0.2.25+)
+	////对通道进行采样的整数百分比（需要nsqd 0.2.25+）
 	SampleRate int32 `opt:"sample_rate" min:"0" max:"99"`
 
 	// To set TLS config, use the following options:
@@ -163,6 +171,7 @@ type Config struct {
 	Snappy       bool `opt:"snappy"`
 
 	// Size of the buffer (in bytes) used by nsqd for buffering writes to this connection
+	//nsqd用于缓冲对此连接的写入的缓冲区大小（字节）
 	OutputBufferSize int64 `opt:"output_buffer_size" default:"16384"`
 	// Timeout used by nsqd before flushing buffered writes (set to 0 to disable).
 	//
@@ -172,9 +181,11 @@ type Config struct {
 	OutputBufferTimeout time.Duration `opt:"output_buffer_timeout" default:"250ms"`
 
 	// Maximum number of messages to allow in flight (concurrency knob)
+	//飞行中允许的最大消息数（并发旋钮）
 	MaxInFlight int `opt:"max_in_flight" min:"0" default:"1"`
 
 	// The server-side message timeout for messages delivered to this client
+	//传递到此客户端的消息的服务器端消息超时
 	MsgTimeout time.Duration `opt:"msg_timeout" min:"0"`
 
 	// Secret for nsqd authentication (requires nsqd 0.2.29+)

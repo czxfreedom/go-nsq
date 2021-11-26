@@ -593,7 +593,8 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 				conn.String(), resp.MaxRdyCount, r.getMaxInFlight())
 		}
 	}
-
+	// consumer向nsqd发送订阅命令，此时consumer会将自己注册到nsqd中，
+	//更准确的说法是consumer将自己注册到了topic下的channel的client列表中，有消息到来时channle会随机向自己的客户端列表发送消息
 	cmd := Subscribe(r.topic, r.channel)
 	err = conn.WriteCommand(cmd)
 	if err != nil {
@@ -1133,6 +1134,7 @@ func (r *Consumer) handlerLoop(handler Handler) {
 	r.log(LogLevelDebug, "starting Handler")
 
 	for {
+		// 不断的接收 nsqd 发送过来的请求， readloop这个死循环方法会向这个channel仍消息进来，后面我们会说到
 		message, ok := <-r.incomingMessages
 		if !ok {
 			goto exit
@@ -1142,7 +1144,7 @@ func (r *Consumer) handlerLoop(handler Handler) {
 			message.Finish()
 			continue
 		}
-
+		//这边是个回调函数,消费者需要注册handleMessage函数
 		err := handler.HandleMessage(message)
 		if err != nil {
 			r.log(LogLevelError, "Handler returned error (%s) for msg %s", err, message.ID)
@@ -1151,8 +1153,10 @@ func (r *Consumer) handlerLoop(handler Handler) {
 			}
 			continue
 		}
-
+		// 当一条消息处理完成是否从队列中移除，相当于提交，默认消费完一条消息自动提交，可以设置批量提交
 		if !message.IsAutoResponseDisabled() {
+			//	c.msgResponseChan <- &msgResponse{msg: m, cmd: Finish(m.ID), success: true}
+			//这个函数 会往msgResponseChan 发送一条消息
 			message.Finish()
 		}
 	}

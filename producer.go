@@ -34,7 +34,7 @@ type Producer struct {
 	logLvl   LogLevel
 	logGuard sync.RWMutex
 
-	responseChan chan []byte
+	responseChan chan []byte //生产者 读取消费者发过来的数据 并放入通道中
 	errorChan    chan []byte
 	closeChan    chan int
 
@@ -43,7 +43,7 @@ type Producer struct {
 	state           int32
 
 	concurrentProducers int32
-	stopFlag            int32
+	stopFlag            int32 //停止标志: 1:停止
 	exitChan            chan int
 	wg                  sync.WaitGroup
 	guard               sync.Mutex
@@ -52,6 +52,9 @@ type Producer struct {
 // ProducerTransaction is returned by the async publish methods
 // to retrieve metadata about the command after the
 // response is received.
+//ProducerTransaction由异步发布方法返回
+//检索命令后命令的元数据的步骤
+//收到答复。
 type ProducerTransaction struct {
 	cmd      *Command
 	doneChan chan *ProducerTransaction
@@ -249,11 +252,13 @@ func (w *Producer) DeferredPublishAsync(topic string, delay time.Duration, body 
 
 func (w *Producer) sendCommand(cmd *Command) error {
 	doneChan := make(chan *ProducerTransaction)
+	//异步发送消息
 	err := w.sendCommandAsync(cmd, doneChan, nil)
 	if err != nil {
 		close(doneChan)
 		return err
 	}
+	// 等待异步发送完成
 	t := <-doneChan
 	return t.Error
 }
@@ -264,7 +269,7 @@ func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransac
 	// in order to later ensure that we clean them all up...
 	atomic.AddInt32(&w.concurrentProducers, 1)
 	defer atomic.AddInt32(&w.concurrentProducers, -1)
-
+	// 判断有没有和 nsqd 建立连接，已经建立跳过
 	if atomic.LoadInt32(&w.state) != StateConnected {
 		err := w.connect()
 		if err != nil {
@@ -294,7 +299,7 @@ func (w *Producer) connect() error {
 	if atomic.LoadInt32(&w.stopFlag) == 1 {
 		return ErrStopped
 	}
-
+	//如果已经连接,直接返回
 	state := atomic.LoadInt32(&w.state)
 	switch {
 	case state == StateConnected:
@@ -304,7 +309,7 @@ func (w *Producer) connect() error {
 	}
 
 	w.log(LogLevelInfo, "(%s) connecting to nsqd", w.addr)
-
+	//初始化连接,设置日志输出格式等
 	w.conn = NewConn(w.addr, &w.config, &producerConnDelegate{w})
 	w.conn.SetLoggerLevel(w.getLogLevel())
 	format := fmt.Sprintf("%3d (%%s)", w.id)
@@ -321,6 +326,7 @@ func (w *Producer) connect() error {
 	atomic.StoreInt32(&w.state, StateConnected)
 	w.closeChan = make(chan int)
 	w.wg.Add(1)
+	// 生产者利用这个 goroutine 向 nsqd 发送命令和接收响应
 	go w.router()
 
 	return nil
@@ -342,6 +348,7 @@ func (w *Producer) close() {
 func (w *Producer) router() {
 	for {
 		select {
+		// 在上面的 sendCommandAsync 这个方法中只看到了将待发送的命令又包装了一下扔到了一个 transactionChan channel 中，这里在监听，以及将命令发送给nsqd
 		case t := <-w.transactionChan:
 			w.transactions = append(w.transactions, t)
 			err := w.conn.WriteCommand(t.cmd)
@@ -349,6 +356,7 @@ func (w *Producer) router() {
 				w.log(LogLevelError, "(%s) sending command - %s", w.conn.String(), err)
 				w.close()
 			}
+			// 接收 nsqd 的响应
 		case data := <-w.responseChan:
 			w.popTransaction(FrameTypeResponse, data)
 		case data := <-w.errorChan:
